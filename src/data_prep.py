@@ -49,23 +49,23 @@ def load_file(path, cfg):
     ts = parse_timestamps(df[ts_col], cfg)
     df = df.drop(columns=[ts_col])
     df.columns = [snake(c) for c in df.columns]
-    df.insert(0, "ts_utc", ts)
+    df.insert(0, "time_utc", ts)
 
     if cfg["pivot"]:
         cols, vals = snake(cfg["pivot"]["columns"]), snake(cfg["pivot"]["values"])
-        df = df.pivot_table(index="ts_utc", columns=cols, values=vals, aggfunc="last")
+        df = df.pivot_table(index="time_utc", columns=cols, values=vals, aggfunc="last")
         df.columns = [f"{snake(c)}_{vals}" for c in df.columns]
         df = df.reset_index()
     else:
         df = df.drop_duplicates()
-        if df["ts_utc"].duplicated().any():
+        if df["time_utc"].duplicated().any():
             raise ValueError(
                 f"{path.name} has repeated timestamps with different values, so it looks like "
                 "long-format data. Add a 'pivot' entry for it in config/datasets.py."
             )
 
     if cfg["zero_as_missing"]:
-        value_cols = df.columns.drop("ts_utc")
+        value_cols = df.columns.drop("time_utc")
         zeros = int((df[value_cols] == 0).sum().sum())
         df[value_cols] = df[value_cols].mask(df[value_cols] == 0)
         print(f"    {path.name}: {zeros} exact zeros set to missing")
@@ -76,8 +76,8 @@ def build_dataset(name, files):
     cfg = settings(name)
     frames = [load_file(f, cfg) for f in sorted(files)]
     df = pd.concat(frames, ignore_index=True)
-    df = df.drop_duplicates(subset="ts_utc", keep="last")
-    return df.set_index("ts_utc").sort_index()
+    df = df.drop_duplicates(subset="time_utc", keep="last")
+    return df.set_index("time_utc").sort_index()
 
 
 def build_master():
@@ -110,7 +110,7 @@ def build_master():
 
     start = pd.Timestamp(START, tz="UTC") if START else master.index.min()
     end = pd.Timestamp(END, tz="UTC") if END else master.index.max()
-    grid = pd.date_range(start.ceil(FREQ), end, freq=FREQ, name="ts_utc")
+    grid = pd.date_range(start.ceil(FREQ), end, freq=FREQ, name="time_utc")
 
     off_grid = master.index.difference(grid)
     off_grid = off_grid[(off_grid >= start) & (off_grid <= end)]
@@ -124,16 +124,16 @@ def build_master():
         if limit:
             master[cols] = master[cols].ffill(limit=limit)
 
-    master.insert(0, "ts_local", master.index.tz_convert("Europe/Dublin"))
+    master.insert(0, "time_ist", master.index.tz_convert("Europe/Dublin"))
     return master.reset_index()
 
 
 def report(master):
-    print(f"\n  {len(master):,} periods, {master['ts_utc'].min()} to {master['ts_utc'].max()}")
+    print(f"\n  {len(master):,} periods, {master['time_utc'].min()} to {master['time_utc'].max()}")
     print(f"  {'column':<40}{'coverage':>10}  first valid")
     for col in master.columns[2:]:
         valid = master[col].notna()
-        first = master.loc[valid, "ts_utc"].min() if valid.any() else "-"
+        first = master.loc[valid, "time_utc"].min() if valid.any() else "-"
         print(f"  {col:<40}{valid.mean():>9.1%}  {first}")
 
 
