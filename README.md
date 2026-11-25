@@ -1,6 +1,6 @@
-# foc-masters-thesis
+# Sensitivity Analysis of Rare Events in Engineering Systems
 
-**Sensitivity Analysis of Rare Events in Engineering Systems**
+**An Application to Forecasting Imbalance Price Spikes in the All-Island Electricity Market**
 
 Forecasting Irish imbalance prices (PIMB) in the I-SEM, with sensitivity analysis applied at each stage of model development to identify what drives price spikes.
 
