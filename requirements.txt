@@ -1,5 +1,7 @@
 pandas>=2.0
 pyarrow
+matplotlib
 plotly
 nbformat
 ipykernel
+jinja2
