@@ -43,12 +43,55 @@ def parse_timestamps(series, cfg):
         ) from err
 
 
-def load_file(path, cfg):
+BAND = re.compile(r"^(.*)price(\d+)$")
+GENERIC_VALUE_COLS = {"quantity", "value"}
+
+
+def resolve_duplicates(df, path):
+    """For a repeated timestamp, keep the row that matches the following period."""
+    dup = df["time_utc"].duplicated(keep=False)
+    values = df.columns.drop("time_utc")
+    unique = df[~dup].set_index("time_utc")[values]
+    keep = []
+    for t, group in df[dup].groupby("time_utc"):
+        nxt = t + pd.Timedelta(FREQ)
+        match = group.index[-1]
+        if nxt in unique.index:
+            target = unique.loc[nxt].to_numpy()
+            for i, row in group[values].iterrows():
+                if (row.to_numpy() == target).all():
+                    match = i
+                    break
+        keep.append(match)
+    print(f"    {path.name}: {dup.sum() - len(keep)} conflicting duplicate rows resolved")
+    return pd.concat([df[~dup], df.loc[keep]]).sort_values("time_utc")
+
+
+def clear_empty_bands(df, path):
+    """Offer bands with price 0 and quantity 0 are unused padding, not real offers."""
+    cleared = 0
+    for col in df.columns:
+        m = BAND.match(col)
+        qty = f"{m.group(1)}quantity{m.group(2)}" if m else None
+        if qty in df.columns:
+            empty = (df[col] == 0) & (df[qty] == 0)
+            df.loc[empty, [col, qty]] = float("nan")
+            cleared += int(empty.sum())
+    print(f"    {path.name}: {cleared} empty offer bands set to missing")
+    return df
+
+
+def load_file(path, cfg, name):
     df = pd.read_csv(path)
-    ts_col = cfg["timestamp_col"] or df.columns[0]
+    df = df.drop(columns=[c for c in cfg["drop"] if c in df.columns])
+    ts_col = cfg["timestamp_col"] or ("time_utc" if "time_utc" in df.columns else df.columns[0])
     ts = parse_timestamps(df[ts_col], cfg)
     df = df.drop(columns=[ts_col])
     df.columns = [snake(c) for c in df.columns]
+    if cfg["rename"]:
+        df = df.rename(columns={snake(k): v for k, v in cfg["rename"].items()})
+    if len(df.columns) == 1 and df.columns[0] in GENERIC_VALUE_COLS:
+        df.columns = [name]  # a single generic value column takes the dataset name
     df.insert(0, "time_utc", ts)
 
     if cfg["pivot"]:
@@ -59,22 +102,35 @@ def load_file(path, cfg):
     else:
         df = df.drop_duplicates()
         if df["time_utc"].duplicated().any():
-            raise ValueError(
-                f"{path.name} has repeated timestamps with different values, so it looks like "
-                "long-format data. Add a 'pivot' entry for it in config/datasets.py."
-            )
+            if cfg["duplicates"] == "match_next":
+                df = resolve_duplicates(df, path)
+            else:
+                raise ValueError(
+                    f"{path.name} has repeated timestamps with different values. If it is "
+                    "long-format data, add a 'pivot' entry for it in config/datasets.py; if "
+                    "the repeats are stray resubmissions, add 'duplicates': 'match_next'."
+                )
 
     if cfg["zero_as_missing"]:
         value_cols = df.columns.drop("time_utc")
         zeros = int((df[value_cols] == 0).sum().sum())
         df[value_cols] = df[value_cols].mask(df[value_cols] == 0)
         print(f"    {path.name}: {zeros} exact zeros set to missing")
+    if cfg["empty_bands"]:
+        df = clear_empty_bands(df, path)
+    if cfg["prefix"]:
+        df = df.rename(columns={c: f"{cfg['prefix']}{c}" for c in df.columns if c != "time_utc"})
     return df
 
 
 def build_dataset(name, files):
     cfg = settings(name)
-    frames = [load_file(f, cfg) for f in sorted(files)]
+    frames = []
+    for f in sorted(files):
+        try:
+            frames.append(load_file(f, cfg, name))
+        except Exception as err:
+            raise RuntimeError(f"Problem reading {f.name}: {err}") from err
     df = pd.concat(frames, ignore_index=True)
     df = df.drop_duplicates(subset="time_utc", keep="last")
     return df.set_index("time_utc").sort_index()
